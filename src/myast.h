@@ -17,18 +17,30 @@ using namespace std;
 
 static stack<int> cur_num;
 static stack<int> imm_stack;
+static stack<int> if_stack;
 static map<std::string, std::string> const_symtbl;
 static map<std::string, std::string> var_symtbl;
 static vector<string> func_var;
+static vector<string> func_var_array;
+static vector<string> func_var_array_type;
 static vector<vector<string> > param_list;
 static vector<map<std::string, std::string> > var_symtbl_b;
 static vector<map<std::string, std::string> > const_symtbl_b;
 static vector<map<std::string, std::string> > saved_var_symtbl_b;
 static vector<map<std::string, std::string> > saved_const_symtbl_b;
+static vector<map<std::string, vector<int> > > array_index;
+static map<std::string, vector<int> > tmp_array_index;
 static map<std::string, std::string> func_tbl;
 static map<std::string, int> quick_ret;
-static std::string koopa_string;
 static std::string cur_func;
+static std::string cur_array;
+static int rparam;
+static int bool_res_cnt;
+static int cur_while_cnt;
+static int array_dims;
+static int align_depth;
+static int cur_total_num;
+static int need_to_fill;
 static int exp_depth;
 static int block_depth;
 static int func_depth;
@@ -40,11 +52,13 @@ static vector<int> cur_while;
 static int ifcnt = 0;
 static int elsecnt = 0;
 static string tmptype;
+
 class BaseAST
 {
 public:
+  static std::string koopa_string; 
   virtual ~BaseAST() = default;
-  virtual void Dump(FILE *fout, char *koopa_str) const = 0;
+  virtual void Dump() const = 0;
 };
 
 class CompUnitAST : public BaseAST
@@ -52,7 +66,7 @@ class CompUnitAST : public BaseAST
 public:
   std::unique_ptr<BaseAST> compunit;
 
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     cout<<"in compunit"<<endl;
     koopa_string +=  "decl @getint(): i32\ndecl @getch(): i32\ndecl @getarray(*i32): i32\ndecl @putint(i32)\ndecl @putch(i32)\ndecl @putarray(i32, *i32)\ndecl @starttime()\ndecl @stoptime()\n";
@@ -78,9 +92,9 @@ public:
     const_symtbl_b.push_back(*(new map<std::string, std::string>()));
     saved_var_symtbl_b.push_back(*(new map<std::string, std::string>()));
     saved_const_symtbl_b.push_back(*(new map<std::string, std::string>()));
-    compunit -> Dump(fout, koopa_str);
+    array_index.push_back(*(new map<std::string, vector<int> >()));
+    compunit -> Dump();
     
-    strcpy(koopa_str, koopa_string.c_str());
   }
 };
 
@@ -92,22 +106,22 @@ public:
   std::unique_ptr<BaseAST> decl;
   int type;
 
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     cout<<"in compunitb"<<endl;
     if(type == 1){
-      compunit -> Dump(fout, koopa_str);
-      func_def->Dump(fout, koopa_str);
+      compunit -> Dump();
+      func_def->Dump();
     }
     if(type == 2){
-      compunit -> Dump(fout, koopa_str);
-      decl->Dump(fout, koopa_str);
+      compunit -> Dump();
+      decl->Dump();
     }
     if(type == 3){
-      func_def->Dump(fout, koopa_str);
+      func_def->Dump();
     }
     if(type == 4){
-      decl->Dump(fout, koopa_str);
+      decl->Dump();
     }
 
   }
@@ -122,8 +136,15 @@ public:
   std::unique_ptr<BaseAST> block;
   std::unique_ptr<BaseAST> fparams;
 
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
+
+    terminated.push_back(0);
+    cout<<"in func def : "<<array_index.size()<<endl;
+    saved_var_symtbl_b.clear();
+    saved_const_symtbl_b.clear();
+    saved_var_symtbl_b.push_back(*(new map<std::string, std::string>()));
+    saved_const_symtbl_b.push_back(*(new map<std::string, std::string>()));
     cout<<"in funcdef"<<endl;
     cur_func = ident;
     func_var = *new vector<string>();
@@ -132,22 +153,22 @@ public:
       func_tbl[ident] = "int"; 
       koopa_string += ": i32 {\n%entry:\n";
       cout<<2<<endl;
-      block->Dump(fout, koopa_str);
+      block->Dump();
       if(!terminated.back()){
-        koopa_string += "  ret\n";
+        koopa_string += "  ret 0\n";
       }
       koopa_string += "}\n";
     }
     if(type == 2){
       koopa_string += "fun @" + ident + "(";
-      fparams -> Dump(fout, koopa_str);
+      fparams -> Dump();
       koopa_string += ")";
       func_tbl[ident] = "int";
       koopa_string += ": i32 {\n%entry:\n";
       cout<<2<<endl;
-      block->Dump(fout, koopa_str);
+      block->Dump();
       if(!terminated.back()){
-        koopa_string += "  ret\n";
+        koopa_string += "  ret 0\n";
       }
       koopa_string += "}\n";
     }
@@ -156,7 +177,7 @@ public:
       func_tbl[ident] = "void"; 
       koopa_string += "{\n%entry:\n";
       cout<<2<<endl;
-      block->Dump(fout, koopa_str);
+      block->Dump();
       if(!terminated.back()){
         quick_ret[cur_func] = -114514;
         koopa_string += "  ret\n";
@@ -165,18 +186,19 @@ public:
     }
     if(type == 4){
       koopa_string += "fun @" + ident + "(";
-      fparams -> Dump(fout, koopa_str);
+      fparams -> Dump();
       koopa_string += ")";
       func_tbl[ident] = "void";
       koopa_string += "{\n%entry:\n";
       cout<<2<<endl;
-      block->Dump(fout, koopa_str);
+      block->Dump();
       if(!terminated.back()){
         quick_ret[cur_func] = -114514;
         koopa_string += "  ret\n";
       }
       koopa_string += "}\n";
     }
+    terminated.pop_back();
   }
 };
 
@@ -186,9 +208,10 @@ public:
   std::unique_ptr<BaseAST> func_type;
   std::string ident;
   std::unique_ptr<BaseAST> fparams;
+  std::unique_ptr<BaseAST> constexpa;
   int type;
 
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     cout<<"in fparam"<<endl;
     if(type == 1){
@@ -196,12 +219,58 @@ public:
       koopa_string += ": i32";
       koopa_string += ",";
       func_var.push_back(ident);
-      fparams->Dump(fout, koopa_str);
+      fparams->Dump();
     }
     if(type == 2){
       koopa_string += "@" + ident;
       koopa_string += ": i32";
       func_var.push_back(ident);
+    }
+    if(type == 3 || type == 4){
+      string lval = ident;
+      int save_array_dims = array_dims;
+      array_dims = 0;
+      constexpa -> Dump();
+      string ref = "";
+      tmp_array_index[lval] = *new vector<int>();
+      while(!imm_stack.empty() && array_dims--){
+        std::cout << "in func param 3 safe1 : " << imm_stack.size()<<endl;
+        tmp_array_index[lval].push_back(imm_stack.top());
+        if(tmp_array_index[lval].size() == 1){
+          ref = "[i32, " + to_string(imm_stack.top()) + "]";
+        }
+        else{
+          ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+        }
+        imm_stack.pop();
+        cur_num.pop();
+      }
+      // this means the first dimision of this array is not defined
+      tmp_array_index[lval].push_back(-1);
+      ref = "*" + ref;
+      koopa_string += "@" + ident + ": " + ref;
+      func_var_array.push_back(ident);
+      func_var_array_type.push_back(ref);
+      if(type == 3){
+        koopa_string += ",";
+        fparams->Dump();
+      }
+      array_dims = save_array_dims;
+    }
+    if(type == 5 || type == 6){
+      string lval = ident;
+      string ref = "";
+      tmp_array_index[lval] = *new vector<int>();
+      // this means the first dimision of this array is not defined
+      tmp_array_index[lval].push_back(-1);
+      ref = "*i32";
+      koopa_string += "@" + ident + ": " + ref ;
+      func_var_array.push_back(ident);
+      func_var_array_type.push_back(ref);
+      if(type == 5){
+        koopa_string += ",";
+        fparams->Dump();
+      }
     }
   }
 };
@@ -210,7 +279,7 @@ class FuncTypeAST : public BaseAST
 {
 public:
   std::string functype;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     //TODO:depth isn't correct
     std::cout << "in functype1" << endl;
@@ -228,14 +297,18 @@ class BlockAST : public BaseAST
 public:
   std::unique_ptr<BaseAST> blockitem;
   int type;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
+    cout<<"in block, check terminated:"<<endl;
+    for(int i = 0 ; i < terminated.size(); i ++){
+      cout<<"  i: "<<terminated[i]<<endl;
+    }
     if(type == 1){
-      terminated.push_back(0);
       var_symtbl_b.push_back(*(new map<std::string, std::string>()));
       const_symtbl_b.push_back(*(new map<std::string, std::string>()));
       saved_var_symtbl_b.push_back(*(new map<std::string, std::string>()));
       saved_const_symtbl_b.push_back(*(new map<std::string, std::string>()));
+      array_index.push_back(*(new map<std::string, vector<int> >()));
       block_depth += 1;
       if(block_depth > max_block_depth){
         saved_var_symtbl_b.push_back(*(new map<std::string, std::string>()));
@@ -249,18 +322,31 @@ public:
         koopa_string += "  @" + tmp + "_" + to_string(block_depth) + " = alloc i32\n  store @" + tmp + ", @" + tmp + "_" + to_string(block_depth) + "\n";
         var_symtbl_b[block_depth][tmp] = "%"+tmp;
       }
+      while(!func_var_array.empty()){
+        cout<<"parse array"<<endl;
+        string tmp = func_var_array.front();
+        array_index[block_depth][tmp] = *new vector<int>();
+        func_var_array.erase(func_var_array.begin());
+        string tmp2 = func_var_array_type.front();
+        func_var_array_type.erase(func_var_array_type.begin());
+        koopa_string += "  @" + tmp + "_" + to_string(block_depth) + " = alloc " + tmp2 + "\n  store @" + tmp + ", @" + tmp + "_" + to_string(block_depth) + "\n";
+        for(int i = 0 ; i < tmp_array_index[tmp].size(); i++){
+          array_index[block_depth][tmp].push_back(tmp_array_index[tmp][i]);
+        }
+      }
       std::cout << "in block" << endl;
-      blockitem->Dump(fout, koopa_str);
+      blockitem->Dump();
       var_symtbl_b.pop_back();
       const_symtbl_b.pop_back();
+      array_index.pop_back();
       block_depth -= 1;
     }
     else{
-      terminated.push_back(0);
       var_symtbl_b.push_back(*(new map<std::string, std::string>()));
       const_symtbl_b.push_back(*(new map<std::string, std::string>()));
       saved_var_symtbl_b.push_back(*(new map<std::string, std::string>()));
       saved_const_symtbl_b.push_back(*(new map<std::string, std::string>()));
+      array_index.push_back(*(new map<std::string, vector<int> >()));
       block_depth += 1;
       if(block_depth > max_block_depth){
         saved_var_symtbl_b.push_back(*(new map<std::string, std::string>()));
@@ -274,7 +360,28 @@ public:
         koopa_string += "  @" + tmp + "_" + to_string(block_depth) + " = alloc i32\n  store @" + tmp + ", @" + tmp + "_" + to_string(block_depth) + "\n";
         var_symtbl_b[block_depth][tmp] = "%"+tmp;
       }
+      while(!func_var_array.empty()){
+        cout<<"parse array"<<endl;
+        string tmp = func_var_array.front();
+        array_index[block_depth][tmp] = *new vector<int>();
+        func_var_array.erase(func_var_array.begin());
+        string tmp2 = func_var_array_type.front();
+        func_var_array_type.erase(func_var_array_type.begin());
+        koopa_string += "  @" + tmp + "_" + to_string(block_depth) + " = alloc " + tmp2 + "\n  store @" + tmp + ", @" + tmp + "_" + to_string(block_depth) + "\n";
+        for(int i = 0 ; i < tmp_array_index[tmp].size(); i++){
+          array_index[block_depth][tmp].push_back(tmp_array_index[tmp][i]);
+        }
+      }
       std::cout << "in block" << endl;
+      var_symtbl_b.pop_back();
+      const_symtbl_b.pop_back();
+      array_index.pop_back();
+      block_depth -= 1;
+      std::cout << "in block" << endl;
+    }
+    cout<<"out of block, check terminated:"<<endl;
+    for(int i = 0 ; i < terminated.size(); i ++){
+      cout<<"  i: "<<terminated[i]<<endl;
     }
   }
 };
@@ -282,12 +389,13 @@ class StmtAST : public BaseAST
 {
 public:
   std::unique_ptr<BaseAST> exp;
+  std::unique_ptr<BaseAST> expa;
   std::string lval;
   std::unique_ptr<BaseAST> block;
   std::unique_ptr<BaseAST> ifstmt;
   std::unique_ptr<BaseAST> elsestmt;
   int type;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in stmt" << endl;
     if (terminated.back())
@@ -296,11 +404,16 @@ public:
     }
     if ((type == 1 || type == 3) && !terminated.back())
     {
+      cout<<"heading into stmt ret"<<endl;
       terminated.back() = 1;
-      std::cout << "StmtAST { ";
-      exp->Dump(fout, koopa_str);
+      if(type == 1)
+        exp->Dump();
       koopa_string += "  ret ";
-      if (cur_num.empty() || type == 3)
+      if(type == 3){
+        koopa_string += "\n";
+        return ;
+      }
+      if (cur_num.empty())
         koopa_string += "0\n";
       else
       {
@@ -319,13 +432,13 @@ public:
           std::cout << "expr";
           koopa_string +=  "%" + to_string(ttype) + "\n";
         }
-        //std::cout << " }";
       }
+      cout<<"finish stmt ret"<<endl;
     }
     // fuzhiyuju
     else if (type == 2)
     {
-      exp->Dump(fout, koopa_str);
+      exp->Dump();
       int ttype = cur_num.top();
       cur_num.pop();
       string exp1;
@@ -354,7 +467,7 @@ public:
     }
     else if (type == 4)
     {
-      exp->Dump(fout, koopa_str);
+      exp->Dump();
       int ttype = cur_num.top();
       cur_num.pop();
       if(ttype == -1){
@@ -367,10 +480,10 @@ public:
     }
     else if(type == 6)
     {
-      block->Dump(fout, koopa_str);
+      block->Dump();
     }
     else if(type == 7){
-      exp -> Dump(fout, koopa_str);
+      exp -> Dump();
       int ttype = cur_num.top();
       cur_num.pop();
       int thiscnt = ifcnt;
@@ -384,14 +497,17 @@ public:
       }
       koopa_string += "%then" + to_string(thiscnt) + ":\n";
       terminated.push_back(0);
-      ifstmt -> Dump(fout, koopa_str);
+      ifstmt -> Dump();
       if(!terminated.back())
           koopa_string += "  jump %end" + to_string(thiscnt) + "\n";
       terminated.pop_back();
       koopa_string += "%end" + to_string(thiscnt) + ":\n";
     }
     else if(type == 8){
-      exp -> Dump(fout, koopa_str);
+      if_stack.push(ifcnt);
+      if_stack.push(elsecnt);
+      if_stack.push(2);
+      exp -> Dump();
       int ttype = cur_num.top();
       cur_num.pop();
       int thiscnt = ifcnt;
@@ -407,13 +523,13 @@ public:
       }
       koopa_string += "%then" + to_string(thiscnt) + ":\n";
       terminated.push_back(0);
-      ifstmt -> Dump(fout, koopa_str);
+      ifstmt -> Dump();
       if(!terminated.back())
           koopa_string += "  jump %end" + to_string(thiscnt) + "\n";
       terminated.pop_back();
       koopa_string += "%else" + to_string(thiselsecnt) + ":\n";
       terminated.push_back(0);
-      elsestmt -> Dump(fout, koopa_str);
+      elsestmt -> Dump();
       if(!terminated.back())
           koopa_string += "  jump %end" + to_string(thiscnt) + "\n";
       terminated.pop_back();
@@ -425,7 +541,9 @@ public:
       whilecnt += 1;
       koopa_string += "  jump %while_entry" + to_string(thiscnt) + "\n";
       koopa_string += "%while_entry" + to_string(thiscnt) + ":\n";
-      exp -> Dump(fout, koopa_str);
+      if_stack.push(whilecnt);
+      if_stack.push(3);
+      exp -> Dump();
       //refresh cur while loop
       int ttype = cur_num.top();
       cur_num.pop();
@@ -438,7 +556,7 @@ public:
       }
       koopa_string += "%while_body" + to_string(thiscnt) + ":\n";
       terminated.push_back(0);
-      ifstmt -> Dump(fout, koopa_str);
+      ifstmt -> Dump();
       if(!terminated.back())
         koopa_string += "  jump %while_entry" + to_string(thiscnt) +"\n";
       cout<<"t"<<terminated.back()<<endl;
@@ -454,6 +572,81 @@ public:
       koopa_string += "  jump %while_entry" + to_string(cur_while.back()) + "\n";
       terminated.back() = 1;
     }
+    else if(type == 12){
+      int cur_depth = 0;
+      std::cout << "in stmt 4 safe1 : " << block_depth << endl;
+      for(int i = block_depth ; i >= 0 ; i --){
+        if(!array_index[i][lval].empty()){
+          cout<<"not empty :"<<i<<endl;
+          cur_depth = i;
+          break;
+        }
+      }
+      int ref_cnt = array_index[cur_depth][lval].size();
+      int save_array_dims = array_dims;
+      array_dims = 0;
+      expa->Dump();
+      std::cout << "in stmt 4 safe1.0 : " << ref_cnt << endl;
+      std::cout << "in stmt 4 safe1.1 : " << cur_depth << endl;
+      string ref = "";
+      stack<int> get_ref;
+      while(!cur_num.empty() && ref_cnt --){
+        std::cout << "in stmt  3 safe1 : 1 :" << imm_stack.size()<<endl;
+        std::cout << "in stmt  3 safe1 : 2 :" << cur_num.size()<<endl;
+        if(cur_num.top() == -1){
+          get_ref.push(imm_stack.top());
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        else{
+          get_ref.push(-cur_num.top()-1);
+          cur_num.pop();
+        }
+      }
+      if(array_index[cur_depth][lval][array_index[cur_depth][lval].size()-1] == -1){
+        cout<<"in stmt , going to usr get ptr,because array_index = " << array_index[cur_depth][lval][array_index[cur_depth][lval].size()-1] << endl;
+        koopa_string += "  %" + to_string(exp_depth) + " = load @" + lval + "_" + to_string(cur_depth) + "\n";
+        exp_depth += 1;
+        if(get_ref.top() >=0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getptr %" + to_string(exp_depth -1) + ", " + to_string(get_ref.top()) + "\n";
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getptr %" + to_string(exp_depth -1) + ", %" + to_string(-get_ref.top()-1) + "\n";
+        }
+      }
+      else{
+        if(get_ref.top() >=0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + lval + "_" + to_string(cur_depth) + ", " + to_string(get_ref.top()) + "\n";
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + lval + "_" + to_string(cur_depth) + ", %" + to_string(-get_ref.top()-1) + "\n";
+        }
+      }
+      get_ref.pop();
+      exp_depth ++;
+      while(!get_ref.empty()){
+        if(get_ref.top() >=0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth - 1) + ", " + to_string(get_ref.top()) + "\n";
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth - 1) + ", %" + to_string(-get_ref.top()-1) + "\n";
+        }
+        get_ref.pop();
+        exp_depth ++;
+      }
+      int saved_exp_depth = exp_depth - 1;
+      array_dims = save_array_dims;
+      exp->Dump();
+      int ttype= cur_num.top();
+      cur_num.pop();
+      if(ttype == -1){
+        koopa_string += "  store " + to_string(imm_stack.top()) + ", %" + to_string(saved_exp_depth ) + "\n";    
+        imm_stack.pop();
+      }
+      else{
+        koopa_string += "  store %" + to_string(ttype) + ", %" + to_string(saved_exp_depth ) + "\n";  
+      }
+    }
   }
 };
 
@@ -461,10 +654,10 @@ class ExpAST : public BaseAST
 {
 public:
   std::unique_ptr<BaseAST> lorexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in exp" << endl;
-    lorexp->Dump(fout, koopa_str);
+    lorexp->Dump();
   }
 };
 
@@ -474,75 +667,51 @@ public:
   int type;
   std::unique_ptr<BaseAST> landexp;
   std::unique_ptr<BaseAST> lorexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in lorexp" << endl;
     if (type == 1)
     {
-      landexp->Dump(fout, koopa_str);
+      landexp->Dump();
     }
     if (type != 1)
     {
-      lorexp->Dump(fout, koopa_str);
-      int ttype1;
-      int ttype2;
-      string exp1;
-      string exp2;
-      ttype1 = cur_num.top();
+      lorexp -> Dump();
+      int ttype = cur_num.top();
       cur_num.pop();
-      if(ttype1 == -1){
-        int tmptop = imm_stack.top();
-        if(tmptop == 1){
-          imm_stack.pop();
-          cur_num.push(-1);
-          imm_stack.push(1);
-          return;
-        }
-      }
-      landexp->Dump(fout, koopa_str);
-      ttype2 = cur_num.top();
-      cur_num.pop();
-      if(ttype1 == -1 && ttype2 == -1){
-        int var1 = imm_stack.top();
+      int thiscnt = ifcnt;
+      ifcnt += 1;
+      int thisboolcnt = bool_res_cnt;
+      bool_res_cnt += 1;
+      koopa_string += "  @bool_res_0_" + to_string(thisboolcnt) + " = alloc i32\n";
+      koopa_string += "  store 1, @bool_res_0_" + to_string(thisboolcnt) +"\n";
+      if(ttype == -1){
+        koopa_string += "  %" + to_string(exp_depth) + " = eq 0, " + to_string(imm_stack.top()) + "\n";
         imm_stack.pop();
-        int var2 = imm_stack.top();
-        imm_stack.pop();
-        cur_num.push(-1);
-        imm_stack.push(var1||var2);
       }
       else{
-        if (ttype1 == -1)
-        {
-          exp1 = to_string(imm_stack.top());
-          imm_stack.pop();
-        }
-        else
-        {
-          exp1 = "%" + to_string(ttype1);
-        }
-        if (ttype2 == -1)
-        {
-          exp2 = to_string(imm_stack.top());
-          imm_stack.pop();
-        }
-        else
-        {
-          exp2 = "%" +  to_string(ttype2);
-        }
-        string myexp1;
-        myexp1 = "%" + to_string(exp_depth);
-        exp_depth += 1;
-        string myexp2;
-        myexp2 = "%" + to_string(exp_depth);
-        exp_depth += 1;
-        string myexp3;
-        myexp3 = "%" + to_string(exp_depth);
-        exp_depth += 1;
-        koopa_string += "  " + myexp1 + " = ne 0, " + exp1 + "\n";
-        koopa_string += "  " + myexp2 + " = ne 0, " + exp2 + "\n";
-        koopa_string += "  " + myexp3 + " = or " + myexp1 + ", " + myexp2 + "\n";
-        cur_num.push(exp_depth - 1);
+        koopa_string += "  %" + to_string(exp_depth) + " = eq 0, %" + to_string(ttype) + "\n";
       }
+      koopa_string += "  br %" + to_string(exp_depth) + ", %then" + to_string(thiscnt) + ", %end" + to_string(thiscnt) + "\n";
+      exp_depth += 1;
+      koopa_string += "%then" + to_string(thiscnt) + ":\n";
+      landexp -> Dump();
+      int ttype2 = cur_num.top();
+      cur_num.pop();
+      if(ttype2 == -1){
+        koopa_string += "  %" + to_string(exp_depth) + " = ne 0, " + to_string(imm_stack.top()) + "\n";
+        imm_stack.pop();
+      }
+      else{
+        koopa_string += "  %" + to_string(exp_depth) + " = ne 0, %" + to_string(ttype2) + "\n";
+      }
+      koopa_string += "  store %" + to_string(exp_depth) + ", @bool_res_0_" + to_string(thisboolcnt) +"\n";
+      exp_depth += 1;
+      koopa_string += "  jump %end" + to_string(thiscnt) + "\n";
+      koopa_string += "%end" + to_string(thiscnt) + ":\n";
+      koopa_string += "  %" + to_string(exp_depth) + " = load @bool_res_0_" + to_string(thisboolcnt) +"\n";
+      exp_depth += 1;
+      cur_num.push(exp_depth - 1);
     }
   }
 };
@@ -553,76 +722,51 @@ public:
   int type;
   std::unique_ptr<BaseAST> eqexp;
   std::unique_ptr<BaseAST> landexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in landexp" << endl;
     if (type == 1)
     {
-      eqexp->Dump(fout, koopa_str);
+      eqexp->Dump();
     }
     if (type != 1)
     {
-      landexp->Dump(fout, koopa_str);
-      int ttype1;
-      int ttype2;
-      string exp1;
-      string exp2;
-      ttype1 = cur_num.top();
+      landexp -> Dump();
+      int ttype = cur_num.top();
       cur_num.pop();
-      if(ttype1 == -1){
-        int tmptop = imm_stack.top();
-        if(tmptop == 0){
-          imm_stack.pop();
-          cur_num.push(-1);
-          imm_stack.push(0);
-          return;
-        }
-      }
-      eqexp->Dump(fout, koopa_str);
-      ttype2 = cur_num.top();
-      cur_num.pop();
-      if(ttype1 == -1 && ttype2 == -1){
-        int var1 = imm_stack.top();
+      int thiscnt = ifcnt;
+      ifcnt += 1;
+      int thisboolcnt = bool_res_cnt;
+      bool_res_cnt += 1;
+      koopa_string += "  @bool_res_0_" + to_string(thisboolcnt) + " = alloc i32\n";
+      koopa_string += "  store 0, @bool_res_0_" + to_string(thisboolcnt) +"\n";
+      if(ttype == -1){
+        koopa_string += "  %" + to_string(exp_depth) + " = ne 0, " + to_string(imm_stack.top()) + "\n";
         imm_stack.pop();
-        int var2 = imm_stack.top();
-        imm_stack.pop();
-        cur_num.push(-1);
-        imm_stack.push(var1&&var2);
       }
       else{
-        if (ttype1 == -1)
-        {
-          exp1 = to_string(imm_stack.top());
-          imm_stack.pop();
-        }
-        else
-        {
-          exp1 = "%" + to_string(ttype1);
-        }
-        if (ttype2 == -1)
-        {
-          exp2 = to_string(imm_stack.top());
-          imm_stack.pop();
-        }
-        else
-        {
-          exp2 = "%" + to_string(ttype2);
-        }
-        
-        string myexp1;
-        myexp1 = "%" + to_string(exp_depth);
-        exp_depth += 1;
-        string myexp2;
-        myexp2 = "%" + to_string(exp_depth);
-        exp_depth += 1;
-        string myexp3;
-        myexp3 = "%" + to_string(exp_depth);
-        exp_depth += 1;
-        koopa_string += "  " + myexp1 + " = ne 0, " + exp1 + "\n";
-        koopa_string += "  " + myexp2 + " = ne 0, " + exp2 + "\n";
-        koopa_string += "  " + myexp3 + " = and " + myexp1 + ", " + myexp2 + "\n";
-        cur_num.push(exp_depth - 1);
+        koopa_string += "  %" + to_string(exp_depth) + " = ne 0, %" + to_string(ttype) + "\n";
       }
+      koopa_string += "  br %" + to_string(exp_depth) + ", %then" + to_string(thiscnt) + ", %end" + to_string(thiscnt) + "\n";
+      exp_depth += 1;
+      koopa_string += "%then" + to_string(thiscnt) + ":\n";
+      eqexp -> Dump();
+      int ttype2 = cur_num.top();
+      cur_num.pop();
+      if(ttype2 == -1){
+        koopa_string += "  %" + to_string(exp_depth) + " = ne 0, " + to_string(imm_stack.top()) + "\n";
+        imm_stack.pop();
+      }
+      else{
+        koopa_string += "  %" + to_string(exp_depth) + " = ne 0, %" + to_string(ttype2) + "\n";
+      }
+      koopa_string += "  store %" + to_string(exp_depth) + ", @bool_res_0_" + to_string(thisboolcnt) +"\n";
+      exp_depth += 1;
+      koopa_string += "  jump %end" + to_string(thiscnt) + "\n";
+      koopa_string += "%end" + to_string(thiscnt) + ":\n";
+      koopa_string += "  %" + to_string(exp_depth) + " = load @bool_res_0_" + to_string(thisboolcnt) +"\n";
+      exp_depth += 1;
+      cur_num.push(exp_depth - 1);
     }
   }
 };
@@ -633,17 +777,17 @@ public:
   int type;
   std::unique_ptr<BaseAST> eqexp;
   std::unique_ptr<BaseAST> relexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in eqexp" << endl;
     if (type == 1)
     {
-      relexp->Dump(fout, koopa_str);
+      relexp->Dump();
     }
     if (type != 1)
     {
-      relexp->Dump(fout, koopa_str);
-      eqexp->Dump(fout, koopa_str);
+      relexp->Dump();
+      eqexp->Dump();
       int ttype;
       string exp1;
       string exp2;
@@ -691,17 +835,17 @@ public:
   int type;
   std::unique_ptr<BaseAST> addexp;
   std::unique_ptr<BaseAST> relexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in rel exp" << endl;
     if (type == 1)
     {
-      addexp->Dump(fout, koopa_str);
+      addexp->Dump();
     }
     if (type != 1)
     {
-      addexp->Dump(fout, koopa_str);
-      relexp->Dump(fout, koopa_str);
+      addexp->Dump();
+      relexp->Dump();
       int ttype;
       string exp1;
       string exp2;
@@ -757,17 +901,20 @@ public:
   int type;
   std::unique_ptr<BaseAST> addexp;
   std::unique_ptr<BaseAST> mulexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in add" << endl;
     if (type == 1)
     {
-      mulexp->Dump(fout, koopa_str);
+      mulexp->Dump();
     }
     if (type != 1)
     {
-      addexp->Dump(fout, koopa_str);
-      mulexp->Dump(fout, koopa_str);
+      std::cout << "add going to parse" << endl;
+      addexp->Dump();
+      std::cout << "add parsed add" << endl;
+      mulexp->Dump();
+      std::cout << "add parsed mul" << endl;
       int ttype1;
       int ttype2;
       string exp1;
@@ -835,17 +982,17 @@ public:
   int type;
   std::unique_ptr<BaseAST> mulexp;
   std::unique_ptr<BaseAST> unaryexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in mul" << endl;
     if (type == 1)
     {
-      unaryexp->Dump(fout, koopa_str);
+      unaryexp->Dump();
     }
     if (type != 1)
     {
-      unaryexp->Dump(fout, koopa_str);
-      mulexp->Dump(fout, koopa_str);
+      unaryexp->Dump();
+      mulexp->Dump();
       int ttype1;
       int ttype2;
       string exp1;
@@ -920,18 +1067,18 @@ public:
   std::unique_ptr<BaseAST> unaryexp;
   std::unique_ptr<BaseAST> rparams;
   std::string ident;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in unary" << endl;
     if (type == 1)
     {
       std::cout << "in unary1" << endl;
-      primaryexp->Dump(fout, koopa_str);
+      primaryexp->Dump();
     }
     if (type != 1 && type != 5 && type != 6)
     {
       std::cout << "in unary234" << endl;
-      unaryexp->Dump(fout, koopa_str);
+      unaryexp->Dump();
       if (type != 2)
       {
         int ttype = cur_num.top();
@@ -970,58 +1117,46 @@ public:
     }
     if(type == 5){
       std::cout << "in unary5" << endl;
-      if(quick_ret[ident] != -114514){
-        cur_num.push(-1);
-        imm_stack.push(quick_ret[ident]);
-        koopa_string += "  call @" + ident + "()\n";
-      } 
+      if(func_tbl[ident] == "int"){
+        koopa_string += "  %" + to_string(exp_depth) + " = call @" + ident + "()\n";
+        cur_num.push(exp_depth);
+        exp_depth += 1;
+      }
       else{
-        if(func_tbl[ident] == "int"){
-          koopa_string += "  %" + to_string(exp_depth) + " = call @" + ident + "()\n";
-          cur_num.push(exp_depth);
-          exp_depth += 1;
-        }
-        else{
-          // not defined
-          koopa_string += "  call @" + ident + "()\n";
-          cur_num.push(-1);
-          imm_stack.push(1);
-        }
+        // not defined
+        koopa_string += "  call @" + ident + "()\n";
+        cur_num.push(-1);
+        imm_stack.push(1);
       }
     }
     if(type == 6){
       std::cout << "in unary6" << endl;
       param_list.push_back(*new vector<string>());
-      rparams -> Dump(fout, koopa_str);
-      if(quick_ret[ident] != -114514){
-        cur_num.push(-1);
-        imm_stack.push(quick_ret[ident]);
-        koopa_string += "  call @" + ident + "()\n";
-      } 
+      rparams -> Dump();
+      if(func_tbl[ident] == "int"){
+        koopa_string += "  %" + to_string(exp_depth) + " = call @" + ident + "(";
+        cur_num.push(exp_depth);
+        exp_depth += 1;
+      }
       else{
-        if(func_tbl[ident] == "int"){
-          koopa_string += "  %" + to_string(exp_depth) + " = call @" + ident + "(";
-          cur_num.push(exp_depth);
-          exp_depth += 1;
+        koopa_string += "  call @" + ident + "(";
+        cur_num.push(-1);
+        imm_stack.push(1);
+      }
+      while(!param_list.back().empty()){
+        cout<<"parsing param list"<<endl;
+        if(param_list.back().size() == 1){
+          koopa_string += param_list.back().front();
         }
         else{
-          koopa_string += "  call @" + ident + "(";
-          cur_num.push(-1);
-          imm_stack.push(1);
+          koopa_string += param_list.back().front() + ", ";
         }
-        while(!param_list.back().empty()){
-          cout<<"parsing param list"<<endl;
-          if(param_list.back().size() == 1){
-            koopa_string += param_list.back().front();
-          }
-          else{
-            koopa_string += param_list.back().front() + ", ";
-          }
-          param_list.back().erase(param_list.back().begin());
-        }
-        koopa_string += ")\n";
-        param_list.pop_back();
+        param_list.back().erase(param_list.back().begin());
+        cout<<"parsing param list finish"<<endl;
       }
+      koopa_string += ")\n";
+      param_list.pop_back();
+    
     }
   }
 };
@@ -1033,11 +1168,15 @@ public:
   std::unique_ptr<BaseAST> rparams;
   int type;
 
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
-    std::cout << "in rparam" << endl;
-    exp->Dump(fout, koopa_str);
+    std::cout << "in rparam1" << endl;
+    rparam = 1;
+    exp->Dump();
+    rparam = 0;
+    std::cout << "in rparam2" << endl;
     int ttype = cur_num.top();
+    std::cout << "in rparam3" << endl;
     cur_num.pop();
     if(ttype == -1){
       param_list.back().push_back(to_string(imm_stack.top()));
@@ -1047,7 +1186,9 @@ public:
       param_list.back().push_back("%" + to_string(ttype));
     }
     if(type == 1){
-      rparams -> Dump(fout, koopa_str);
+      rparam = 1;
+      rparams -> Dump();
+      rparam = 0;
     }
   }
 };
@@ -1059,7 +1200,9 @@ public:
   std::string lval;
   std::unique_ptr<BaseAST> exp;
   std::unique_ptr<BaseAST> number;
-  void Dump(FILE *fout, char *koopa_str) const override
+  std::unique_ptr<BaseAST> constexp;
+  std::unique_ptr<BaseAST> constexpa;
+  void Dump() const override
   {
     std::cout << "in primaryexp" << endl;
     if (type == 3)
@@ -1070,6 +1213,8 @@ public:
       int ttype = 0;
       int depth1;
       int depth2;
+      int depth3;
+      std::cout << "parsing 1" << endl;
       for (depth1 = block_depth; depth1 >= 0; depth1--)
       {
         if (const_symtbl_b[depth1].find(lval) != const_symtbl_b[depth1].end())
@@ -1079,6 +1224,7 @@ public:
           break;
         }
       }
+      std::cout << "parsing 2" << endl;
       for (depth2 = block_depth; depth2 > depth1; depth2--)
       {
         if (var_symtbl_b[depth2].find(lval) != var_symtbl_b[depth2].end())
@@ -1088,9 +1234,40 @@ public:
           break;
         }
       }
+      std::cout << "parsing 3" << endl;
+      for (depth3 = block_depth; depth3 > depth2; depth3--)
+      {
+        if (array_index[depth3].find(lval) != array_index[depth3].end() && !(array_index[depth3][lval].size() == 0))
+        {
+          cout<<"this ref has depth : "<< array_index[depth3][lval].size()<<endl;
+          ttype = 3;
+          break;
+        }
+      }
       // variable need to be load
+      if (ttype == 3)
+      {
+        std::cout << "loading 3" << endl;
+        std::cout << "no target in const symbol & var symbol : " << depth3 << endl;
+        string myexp;
+        myexp = "%" + to_string(exp_depth);
+        if(array_index[depth3][lval][array_index[depth3][lval].size()-1] == -1){
+          koopa_string += "  " + myexp + " = load @" + lval + "_" + to_string(depth3) + "\n";
+          string nmyexp = "%" + to_string(exp_depth+1);
+          cout<<"in primary exp load , going to usr get ptr,because array_index = " << array_index[depth3][lval][array_index[depth3][lval].size()-1] << endl;
+
+          koopa_string += "  " + nmyexp + " = getptr " + myexp + ", 0\n";
+          exp_depth++;
+        }
+        else{
+          koopa_string += "  " + myexp + " = getelemptr @" + lval + "_" + to_string(depth3) + ", 0\n";
+        }
+        cur_num.push(exp_depth);
+        exp_depth++;
+      }
       if (ttype == 2)
       {
+        std::cout << "loading 2" << endl;
         std::cout << "no target in const symbol" << endl;
         string myexp;
         myexp = "%" + to_string(exp_depth);
@@ -1098,8 +1275,9 @@ public:
         cur_num.push(exp_depth);
         exp_depth++;
       }
-      else
+      if(ttype == 1)
       {
+        std::cout << "loading 1" << endl; 
         std::string target = it1->second;
         if (target[0] == '%')
         {
@@ -1115,11 +1293,97 @@ public:
           imm_stack.push(stoi(target));
         }
       }
+      std::cout << "finish loading 1" << endl;
     }
     else if (type == 2)
-      number->Dump(fout, koopa_str);
-    else
-      exp->Dump(fout, koopa_str);
+      number->Dump();
+    else if(type == 1)
+      exp->Dump();
+    else if(type == 4){
+      std::cout << " in primary exp type 4" << endl;
+      int cur_depth = 0;
+      for(int i = block_depth ; i >= 0 ; i --){
+        if(!array_index[i][lval].empty()){
+          cout<<"not empty :"<<i<<endl;
+          cur_depth = i;
+          break;
+        }
+      }
+      int ref_cnt = array_index[cur_depth][lval].size();
+      int save_array_dims = array_dims;
+      array_dims = 0;
+      int ttl_dims = 0;
+      constexpa->Dump();
+      std::cout << " in primary exp type 4 finish parsing constexp" << endl;
+      ttl_dims = array_dims;
+      std::cout << "in primary 4 safe1 : " << ref_cnt << ", " << array_dims <<  endl;
+      string ref = "";
+      stack<int> get_ref;
+      std::cout << "out primary 3 safe1 : 1 :" << imm_stack.size()<<endl;
+      std::cout << "out primary 3 safe1 : 2 :" << cur_num.size()<<endl;
+      while(!cur_num.empty() && ref_cnt -- && array_dims--){
+        std::cout << "in primary 3 safe1 : 1 :" << imm_stack.size()<<endl;
+        std::cout << "in primary 3 safe1 : 2 :" << cur_num.size()<<endl;
+        if(cur_num.top() == -1){
+          get_ref.push(imm_stack.top());
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        else{
+          get_ref.push(-cur_num.top()-1);
+          cur_num.pop();
+        }
+      }
+      std::cout << "in primary 4 safe1 out of while " << ref_cnt << endl;
+      if(array_index[cur_depth][lval][array_index[cur_depth][lval].size()-1] == -1){
+        koopa_string += "  %" + to_string(exp_depth) + " = load @" + lval + "_" + to_string(cur_depth) + "\n";
+        exp_depth += 1;
+        if(get_ref.top() >=0){
+          cout<<"in primary exp ref , going to usr get ptr,because array_index = " << array_index[cur_depth][lval][array_index[cur_depth][lval].size()-1] << endl;
+          koopa_string += "  %" + to_string(exp_depth) + " = getptr %" + to_string(exp_depth -1) + ", " + to_string(get_ref.top()) + "\n";
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getptr %" + to_string(exp_depth -1) + ", %" + to_string(-get_ref.top()-1) + "\n";
+        }
+      }
+      else{
+        if(get_ref.top() >=0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + lval + "_" + to_string(cur_depth) + ", " + to_string(get_ref.top()) + "\n";
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + lval + "_" + to_string(cur_depth) + ", %" + to_string(-get_ref.top()-1) + "\n";
+        }
+      }
+      get_ref.pop();
+      exp_depth ++;
+      while(!get_ref.empty()){
+        if(get_ref.top() >=0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth - 1) + ", " + to_string(get_ref.top()) + "\n";
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth - 1) + ", %" + to_string(-get_ref.top()-1) + "\n";
+        }
+        get_ref.pop();
+        exp_depth ++;
+      }
+      // is not parsing from function params. this means need to return a value.
+      if(!rparam){
+        koopa_string += "  %" + to_string(exp_depth) + " = load %" + to_string(exp_depth-1) + "\n"; 
+        exp_depth ++;
+      }
+      else{
+        if(ttl_dims == array_index[cur_depth][lval].size()){
+          koopa_string += "  %" + to_string(exp_depth) + " = load %" + to_string(exp_depth-1) + "\n"; 
+          exp_depth ++;
+        }
+        else{
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth - 1) + ", " + to_string(0) + "\n";
+          exp_depth ++;
+        }
+      }
+      array_dims = save_array_dims;
+      cur_num.push(exp_depth-1);
+    }
   }
 };
 
@@ -1127,7 +1391,7 @@ class NumberAST : public BaseAST
 {
 public:
   int num;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in number" << endl;
     cur_num.push(-1);
@@ -1148,7 +1412,7 @@ public:
   std::unique_ptr<BaseAST> decl;
   std::unique_ptr<BaseAST> blockitem;
   int type;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     if (terminated.back())
     {
@@ -1158,32 +1422,32 @@ public:
     if (type == 1)
     {
       std::cout << "    type1" << endl;
-      blockitem->Dump(fout, koopa_str);
+      blockitem->Dump();
       if (terminated.back())
       {
         return;
       }
-      stmt->Dump(fout, koopa_str);
+      stmt->Dump();
     }
     else if (type == 2)
     {
       std::cout << "    type2" << endl;
-      blockitem->Dump(fout, koopa_str);
+      blockitem->Dump();
       if (terminated.back())
       {
         return;
       }
-      decl->Dump(fout, koopa_str);
+      decl->Dump();
     }
     else if (type == 3)
     {
       std::cout << "    type3" << endl;
-      decl->Dump(fout, koopa_str);
+      decl->Dump();
     }
     else if (type == 4)
     {
       std::cout << "    type4" << endl;
-      stmt->Dump(fout, koopa_str);
+      stmt->Dump();
     }
   }
 };
@@ -1194,16 +1458,16 @@ public:
   std::unique_ptr<BaseAST> constdecl;
   std::unique_ptr<BaseAST> vardecl;
   int type;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in decl" << endl;
     if (type == 1)
     {
-      constdecl->Dump(fout, koopa_str);
+      constdecl->Dump();
     }
     else
     {
-      vardecl->Dump(fout, koopa_str);
+      vardecl->Dump();
     }
   }
 };
@@ -1212,10 +1476,10 @@ class ConstDeclAST : public BaseAST
 {
 public:
   std::unique_ptr<BaseAST> constdef;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in const decl" << endl;
-    constdef->Dump(fout, koopa_str);
+    constdef->Dump();
   }
 };
 
@@ -1225,26 +1489,98 @@ public:
   std::string lval;
   std::unique_ptr<BaseAST> constdef;
   std::unique_ptr<BaseAST> constinitval;
+  std::unique_ptr<BaseAST> constexpa;
   int type;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
+    int array_depth = -1;
     std::cout << "in const def" << endl;
     if (type == 2)
     {
-      constdef->Dump(fout, koopa_str);
+      std::cout << "in const def 2" << endl;
+      constdef->Dump();
     }
-    constinitval->Dump(fout, koopa_str);
-    int ttype = cur_num.top();
-    cur_num.pop();
-    if (ttype == -1)
-    {
-      int tmp = imm_stack.top();
-      imm_stack.pop();
-      const_symtbl_b[block_depth][lval] = to_string(tmp);
+    if(type == 3 || type == 4){
+      if(type == 4){
+        constdef->Dump();
+      }
+      array_depth = 0;
+      if(block_depth != 0){
+        std::cout << "in def 3" << endl;
+        cout<<"in decl of array"<<endl;
+        int save_array_dims = array_dims;
+        array_dims = 0;
+        constexpa->Dump();
+        std::cout << "in const def 3 safe1 : " << imm_stack.size()<< endl;
+        string ref = "";
+        array_index[block_depth][lval] = *new vector<int>();
+        while(!imm_stack.empty() && array_dims--){
+          std::cout << "in const def 3 safe1 : " << imm_stack.size()<<endl;
+          array_index[block_depth][lval].push_back(imm_stack.top());
+          if(array_index[block_depth][lval].size() == 1){
+            ref = "[i32, " + to_string(imm_stack.top()) + "]";
+          }
+          else{
+            ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+          }
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc " + ref + "\n";  
+        cur_array = lval;
+        cur_total_num = 0;
+        align_depth = -1;
+        std::cout << "in def 3 going to parse initval" << endl;
+        array_dims = save_array_dims;
+        constinitval -> Dump();
+        std::cout << "back" << endl;
+      }
+      else{
+        std::cout << "in def 3" << endl;
+        cout<<"in decl of array"<<endl;
+        int save_array_dims = array_dims;
+        array_dims = 0;
+        constexpa->Dump();
+        std::cout << "in const def 3 safe1 : " << imm_stack.size()<< endl;
+        string ref = "";
+        array_index[block_depth][lval] = *new vector<int>();
+        while(!imm_stack.empty() && array_dims--){
+          std::cout << "in const def 3 safe1 : " << imm_stack.size()<<endl;
+          array_index[block_depth][lval].push_back(imm_stack.top());
+          if(array_index[block_depth][lval].size() == 1){
+            ref = "[i32, " + to_string(imm_stack.top()) + "]";
+          }
+          else{
+            ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+          }
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        koopa_string += "global @" + lval + "_" + to_string(block_depth) + " = alloc " + ref + ",";  
+        cur_array = lval;
+        cur_total_num = 0;
+        align_depth = -1;
+        std::cout << "in def 3 going to parse initval" << endl;
+        array_dims = save_array_dims;
+        constinitval -> Dump();
+        koopa_string += "\n";
+        std::cout << "back" << endl;
+      }
     }
-    else
-    {
-      const_symtbl_b[block_depth][lval] = "%" + to_string(ttype);
+    if(array_depth == -1){
+      constinitval->Dump();
+      int ttype = cur_num.top();
+      cur_num.pop();
+      if (ttype == -1)
+      {
+        int tmp = imm_stack.top();
+        imm_stack.pop();
+        const_symtbl_b[block_depth][lval] = to_string(tmp);
+      }
+      else
+      {
+        const_symtbl_b[block_depth][lval] = "%" + to_string(ttype);
+      }
     }
   }
 };
@@ -1252,22 +1588,343 @@ public:
 class ConstInitValAST : public BaseAST
 {
 public:
+  std::unique_ptr<BaseAST> constinitval;
   std::unique_ptr<BaseAST> constexp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  std::unique_ptr<BaseAST> constexpb;
+  int type;
+  void Dump() const override
   {
     std::cout << "in const init val" << endl;
-    constexp->Dump(fout, koopa_str);
+    if(type == 1)
+      constexp->Dump();
+    if(type == 2){
+      std::cout << "in type {}" << endl;
+      // this means having another {}, so the exp in this {} can only fill in a smaller array
+      align_depth += 1;
+      int tmp = cur_total_num;
+      int ttldepth = array_index[block_depth][cur_array].size() - align_depth;
+      int this_block_depth = 0;
+      need_to_fill = 1 ;
+      std::cout << "  this ttl depth : " << ttldepth << endl;
+      // array_index[block_depth][cur_array] saves block width from 0 to depth
+      // this_block_depth means in this {} need to fill depth from 0 to this_block_depth
+      // this_block_depth = depth means 
+      for(int i = 0 ; i < ttldepth ; i ++){
+        cout<<array_index[block_depth][cur_array][i]<<endl;
+      }
+      while(tmp % array_index[block_depth][cur_array][this_block_depth] == 0){
+        need_to_fill *= array_index[block_depth][cur_array][this_block_depth];
+        tmp = tmp / array_index[block_depth][cur_array][this_block_depth];
+        this_block_depth ++;
+        if(this_block_depth >= ttldepth){
+          cout<<"this block need to fill in full array"<<endl;
+          break;
+        } 
+      }
+      need_to_fill += cur_total_num;
+      constexpb -> Dump();
+      align_depth -= 1;
+    }
+    if(type == 3){
+      std::cout << "in type empty {}" << endl;
+      align_depth ++;
+      int tmp = cur_total_num;
+      int ttldepth = array_index[block_depth][cur_array].size() - align_depth;
+      int this_block_depth = 0;
+      // array_index[block_depth][cur_array] saves block width from 0 to depth
+      // this_block_depth means in this {} need to fill depth from 0 to ttldepth
+      // this_block_depth = depth means 
+      std::cout << "  this block depth : " << this_block_depth << endl;
+      std::cout << "  this ttl depth : " << ttldepth << endl;
+      cout << array_index[block_depth][cur_array][this_block_depth] << endl;
+      while(tmp % array_index[block_depth][cur_array][this_block_depth] == 0){
+        std::cout << "  array wod : " << endl;
+        tmp = tmp / array_index[block_depth][cur_array][this_block_depth];
+        this_block_depth ++;
+        if(this_block_depth >= ttldepth){
+          cout<<"this block need to fill in full array"<<endl;
+          break;
+        }
+      }
+      int total_num = 1;
+      std::cout << "  this block depth : " << this_block_depth << endl;
+      for(int i = 0 ; i < this_block_depth ; i ++){
+        total_num *= array_index[block_depth][cur_array][i];
+      }
+      cout<<"this block need to fill in :"<< total_num << endl;
+      need_to_fill = total_num;
+      for(int i = 0 ; i < total_num ; i++){
+        std::cout << "    step1 : "  << cur_total_num << endl;
+        int tmp = cur_total_num;
+        ttldepth = array_index[block_depth][cur_array].size();
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          std::cout << "    step2 : " << ref_stack.top() << endl;
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++;
+          }
+          std::cout << "    step3 : "  << endl;
+          koopa_string += "  store " + to_string(0) + ", %" + to_string(exp_depth-1) + "\n"; 
+          cur_total_num++;
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += "0";
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          cur_total_num++;
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+      align_depth -= 1;
+    }
+  }
+};
+
+class ConstExpBAST : public BaseAST
+{
+public:
+  std::unique_ptr<BaseAST> constexpb;
+  std::unique_ptr<BaseAST> constexp;
+  std::unique_ptr<BaseAST> constinitval;
+  int type;
+  void Dump() const override
+  {
+    std::cout << "in const exp b" << endl;
+    if(type == 1){
+      int total_need_fill = need_to_fill;
+      constinitval->Dump();
+      need_to_fill = total_need_fill;
+      std::cout << "  in const exp b type 1 total need to fill : " << need_to_fill << endl;
+      // this is not another {}
+      if(!imm_stack.empty()){
+        int ttldepth = array_index[block_depth][cur_array].size();
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        int tmp = cur_total_num;
+        cur_total_num += 1;
+        std::cout << "  in const exp b type 1 : " << tmp << endl;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++;
+          }
+          koopa_string += "  store " + to_string(imm_stack.top()) + ", %" + to_string(exp_depth-1) + "\n"; 
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += to_string(imm_stack.top());
+          imm_stack.pop();
+          cur_num.pop();
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+      total_need_fill = need_to_fill;
+      constexpb->Dump();
+      std::cout << "  in const exp b type 1 total need to fill : " << need_to_fill << endl;
+      need_to_fill = total_need_fill;
+    }
+    if(type == 2){
+      std::cout << "  in const exp b type 2 stage 1" << endl;
+      int total_need_fill = need_to_fill;
+      constinitval->Dump();
+      need_to_fill = total_need_fill;
+      std::cout << "  in exp b stage 2" << endl;
+      // this is not another {}
+      if(!imm_stack.empty()){
+        int ttldepth = array_index[block_depth][cur_array].size();
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        int tmp = cur_total_num;
+        cur_total_num += 1;
+        std::cout << "  in exp b type 1 : " << tmp << endl;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++;
+          }
+          koopa_string += "  store " + to_string(imm_stack.top()) + ", %" + to_string(exp_depth-1) + "\n"; 
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += to_string(imm_stack.top());
+          imm_stack.pop();
+          cur_num.pop();
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+      for(int tmp = cur_total_num ; tmp < need_to_fill ;){
+        int ttldepth = array_index[block_depth][cur_array].size();
+        std::cout << "  in const exp b stage 7" << endl;
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++; 
+          }
+          koopa_string += "  store " + to_string(0) + ", %" + to_string(exp_depth-1) + "\n"; 
+          cur_total_num++;
+          tmp = cur_total_num;
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += "0";
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          cur_total_num++;
+          tmp = cur_total_num;
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+    }
   }
 };
 
 class ConstExpAST : public BaseAST
 {
 public:
-  std::unique_ptr<BaseAST> exp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  std::unique_ptr<BaseAST> constexp;
+  std::unique_ptr<BaseAST> constexpb;
+  int type;
+  void Dump() const override
   {
     std::cout << "in const exp" << endl;
-    exp->Dump(fout, koopa_str);
+    constexp->Dump();
   }
 };
 
@@ -1275,10 +1932,10 @@ class VarDeclAST : public BaseAST
 {
 public:
   std::unique_ptr<BaseAST> vardef;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in var decl" << endl;
-    vardef->Dump(fout, koopa_str);
+    vardef->Dump();
   }
 };
 
@@ -1288,14 +1945,17 @@ public:
   std::unique_ptr<BaseAST> vardef;
   std::string lval;
   std::unique_ptr<BaseAST> initval;
+  std::unique_ptr<BaseAST> constexp;
+  std::unique_ptr<BaseAST> constexpa;
   int type;
-  void Dump(FILE *fout, char *koopa_str) const override
+  void Dump() const override
   {
     std::cout << "in var def" << endl;
     if (type == 1)
     {
-        vardef->Dump(fout, koopa_str);
-      if(saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end()){
+      std::cout << "in var def type 1" << endl;
+      vardef->Dump();
+      if(block_depth <= 1 || (saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end())){
         if(block_depth != 0)
           koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc i32\n";
         else
@@ -1309,9 +1969,10 @@ public:
     }
     if (type == 2)
     {
-      vardef->Dump(fout, koopa_str);
-      initval->Dump(fout, koopa_str);
-      if(saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end() && block_depth != 0){
+      std::cout << "in var def type 2" << endl;
+      vardef->Dump();
+      initval->Dump();
+      if(block_depth == 1 || (block_depth != 0 && saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end())){
         koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc i32\n";
       }
       int ttype = cur_num.top();
@@ -1338,7 +1999,8 @@ public:
     }
     if (type == 3)
     {
-      if(saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end()){
+      std::cout << "in var def type 3" << endl;
+      if(block_depth <= 1 || (saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end())){
         if(block_depth != 0)
           koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc i32\n";
         else
@@ -1346,11 +2008,17 @@ public:
         var_symtbl_b[block_depth][lval] = "";
         saved_var_symtbl_b[block_depth][lval] = "";
       }
+      else{
+        var_symtbl_b[block_depth][lval] = "";
+        saved_var_symtbl_b[block_depth][lval] = "";
+      }
     }
     if (type == 4)
     {
-      initval->Dump(fout, koopa_str);
-      if(saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end() && block_depth != 0){
+      std::cout << "in var def type 4" << endl;
+      initval->Dump();
+      if(block_depth == 1 || (block_depth != 0 && saved_var_symtbl_b[block_depth].find(lval) == saved_var_symtbl_b[block_depth].end())){
+        std::cout << "in var def type 4 and is local" << endl;
         koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc i32\n";
       }
       int ttype = cur_num.top();
@@ -1379,6 +2047,123 @@ public:
         koopa_string += "  store " + var_symtbl_b[block_depth][lval] + " ,@" + lval + "_" + to_string(block_depth) + "\n";
       }
     }
+    if(type == 5 || type == 7){
+      if(type == 7){
+        vardef->Dump();
+      }
+      if(block_depth != 0){
+        std::cout << "in def 3" << endl;
+        cout<<"in decl of array"<<endl;
+        array_dims = 0;
+        constexpa->Dump();
+        std::cout << "in var def 3 safe1 : " << imm_stack.size()<< endl;
+        string ref = "";
+        array_index[block_depth][lval] = *new vector<int>();
+        while(!imm_stack.empty() && array_dims--){
+          std::cout << "in var def 3 safe1.5 : " << imm_stack.size()<<endl;
+          array_index[block_depth][lval].push_back(imm_stack.top());
+          if(array_index[block_depth][lval].size() == 1){
+            ref = "[i32, " + to_string(imm_stack.top()) + "]";
+          }
+          else{
+            ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+          }
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc " + ref + "\n";  
+        cur_array = lval;
+        cur_total_num = 0;
+        align_depth = -1;
+        std::cout << "in def 3 going to parse initval" << endl;
+        initval -> Dump();
+        std::cout << "back" << endl;
+      }
+      else{
+        std::cout << "in def 3" << endl;
+        cout<<"in decl of array"<<endl;
+        array_dims = 0;
+        constexpa->Dump();
+        std::cout << "in var def 3 safe1 : " << imm_stack.size()<< endl;
+        string ref = "";
+        array_index[block_depth][lval] = *new vector<int>();
+        while(!imm_stack.empty() && array_dims--){
+          std::cout << "in var def 3 safe1 : " << imm_stack.size()<<endl;
+          array_index[block_depth][lval].push_back(imm_stack.top());
+          if(array_index[block_depth][lval].size() == 1){
+            ref = "[i32, " + to_string(imm_stack.top()) + "]";
+          }
+          else{
+            ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+          }
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        koopa_string += "global @" + lval + "_" + to_string(block_depth) + " = alloc " + ref + ",";  
+        cur_array = lval;
+        cur_total_num = 0;
+        align_depth = -1;
+        std::cout << "in def 3 going to parse initval" << endl;
+        initval -> Dump();
+        koopa_string += "\n";
+        std::cout << "back" << endl;
+      }
+    }
+    if(type == 6|| type == 8){
+      if(type == 8){
+        vardef->Dump();
+      }
+      if(block_depth != 0){
+        std::cout << "in def 4" << endl;
+        cout<<"in decl of array"<<endl;
+        array_dims = 0;
+        constexpa->Dump();
+        std::cout << "in var def 3 safe1 : " << imm_stack.size()<< endl;
+        string ref = "";
+        array_index[block_depth][lval] = *new vector<int>();
+        while(!imm_stack.empty() && array_dims--){
+          std::cout << "in var def 3 safe1 : " << imm_stack.size()<<endl;
+          array_index[block_depth][lval].push_back(imm_stack.top());
+          if(array_index[block_depth][lval].size() == 1){
+            ref = "[i32, " + to_string(imm_stack.top()) + "]";
+          }
+          else{
+            ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+          }
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        koopa_string += "  @" + lval + "_" + to_string(block_depth) + " = alloc " + ref + "\n";  
+        cur_array = lval;
+        cur_total_num = 0;
+        align_depth = -1;
+      }
+      else{
+        std::cout << "in global def 4" << endl;
+        cout<<"in decl of array"<<endl;
+        array_dims = 0;
+        constexpa->Dump();
+        std::cout << "in var def 3 safe1 : " << imm_stack.size()<< endl;
+        string ref = "";
+        array_index[block_depth][lval] = *new vector<int>();
+        while(!imm_stack.empty() && array_dims--){
+          std::cout << "in var def 3 safe1 : " << imm_stack.size()<<endl;
+          array_index[block_depth][lval].push_back(imm_stack.top());
+          if(array_index[block_depth][lval].size() == 1){
+            ref = "[i32, " + to_string(imm_stack.top()) + "]";
+          }
+          else{
+            ref = "[" + ref + ", " + to_string(imm_stack.top()) + "]";
+          }
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        cur_array = lval;
+        cur_total_num = 0;
+        align_depth = -1;
+        koopa_string += "global @" + lval + "_" + to_string(block_depth) + " = alloc " + ref + ", zeroinit\n";
+      }
+    }
   }
 };
 
@@ -1386,10 +2171,375 @@ class InitValAST : public BaseAST
 {
 public:
   std::unique_ptr<BaseAST> exp;
-  void Dump(FILE *fout, char *koopa_str) const override
+  std::unique_ptr<BaseAST> expb;
+  std::unique_ptr<BaseAST> initval;
+  int type;
+  void Dump() const override
   {
     std::cout << "in init val" << endl;
-    exp->Dump(fout, koopa_str);
+    if(type == 1)
+      exp->Dump();
+    if(type == 2){
+      std::cout << "in type {}" << endl;
+      // this means having another {}, so the exp in this {} can only fill in a smaller array
+      align_depth += 1;
+      int tmp = cur_total_num;
+      int ttldepth = array_index[block_depth][cur_array].size() - align_depth;
+      int this_block_depth = 0;
+      need_to_fill = 1 ;
+      // array_index[block_depth][cur_array] saves block width from 0 to depth
+      // this_block_depth means in this {} need to fill depth from 0 to this_block_depth
+      // this_block_depth = depth means 
+      for(int i = 0 ; i < ttldepth ; i ++){
+        cout<<array_index[block_depth][cur_array][i]<<endl;
+      }
+      cout<< " this array start from depth : "<< ttldepth << endl;
+      while(tmp % array_index[block_depth][cur_array][this_block_depth] == 0){
+        need_to_fill *= array_index[block_depth][cur_array][this_block_depth];
+        tmp = tmp / array_index[block_depth][cur_array][this_block_depth];
+        this_block_depth ++;
+        if(this_block_depth >= ttldepth){
+          cout<<"this block need to fill in full array : "<<  endl;
+          break;
+        } 
+      }
+      need_to_fill += cur_total_num;
+      expb -> Dump();
+      align_depth -= 1;
+    }
+    if(type == 3){
+      std::cout << "in type empty {}" << endl;
+      align_depth ++;
+      int tmp = cur_total_num;
+      int ttldepth = array_index[block_depth][cur_array].size() - align_depth;
+      int this_block_depth = 0;
+      // array_index[block_depth][cur_array] saves block width from 0 to depth
+      // this_block_depth means in this {} need to fill depth from 0 to ttldepth
+      // this_block_depth = depth means 
+      std::cout << "  this block depth : " << this_block_depth << endl;
+      cout << array_index[block_depth][cur_array][this_block_depth] << endl;
+      while(tmp % array_index[block_depth][cur_array][this_block_depth] == 0){
+        std::cout << "  array wod : " << endl;
+        tmp = tmp / array_index[block_depth][cur_array][this_block_depth];
+        this_block_depth ++;
+        if(this_block_depth >= ttldepth){
+          cout<<"this block need to fill in full array"<<endl;
+          break;
+        }
+      }
+      int total_num = 1;
+      std::cout << "  this block depth : " << this_block_depth << endl;
+      for(int i = 0 ; i < this_block_depth ; i ++){
+        total_num *= array_index[block_depth][cur_array][i];
+      }
+      cout<<"this block need to fill in :"<< total_num << endl;
+      need_to_fill = total_num;
+      for(int i = 0 ; i < total_num ; i++){
+        std::cout << "    step1 : "  << cur_total_num << endl;
+        int tmp = cur_total_num;
+        ttldepth = array_index[block_depth][cur_array].size();
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          std::cout << "    step2 : " << ref_stack.top() << endl;
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++;
+          }
+          std::cout << "    step3 : "  << endl;
+          koopa_string += "  store " + to_string(0) + ", %" + to_string(exp_depth-1) + "\n"; 
+          cur_total_num++;
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += "0";
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          cur_total_num++;
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+      align_depth -= 1;
+    }
+  }
+};
+
+class ConstExpAAST : public BaseAST
+{
+public:
+  std::unique_ptr<BaseAST> constexpa;
+  std::unique_ptr<BaseAST> constexp;
+  int type;
+  void Dump() const override
+  {
+    std::cout << "in const exp a" << endl;
+    if(type == 1){
+      std::cout << "in const exp a type1" << endl;
+      array_dims ++;
+      constexpa->Dump();
+      constexp->Dump();
+    }
+    else{
+      std::cout << "in const exp a type2" << endl;
+      array_dims ++;
+      constexp->Dump();
+    }
+    std::cout << "finish const exp a" << endl;
+  }
+};
+
+class ExpAAST : public BaseAST
+{
+public:
+  std::unique_ptr<BaseAST> expa;
+  std::unique_ptr<BaseAST> exp;
+  int type;
+  void Dump() const override
+  {
+    std::cout << "in exp a" << endl;
+    if(type == 1){
+      array_dims ++;
+      expa->Dump();
+      exp->Dump();
+    }
+    else{
+      array_dims ++;
+      exp->Dump();
+    }
+    std::cout << "finish exp a" << endl;
+  }
+};
+
+
+class ExpBAST : public BaseAST
+{
+public:
+  std::unique_ptr<BaseAST> expb;
+  std::unique_ptr<BaseAST> exp;
+  std::unique_ptr<BaseAST> initval;
+  int type;
+  void Dump() const override
+  {
+    std::cout << "in exp b" << endl;
+    if(type == 1){
+      int total_need_fill = need_to_fill;
+      initval->Dump();
+      need_to_fill = total_need_fill;
+      // this is not another {}
+      if(!imm_stack.empty()){
+        int ttldepth = array_index[block_depth][cur_array].size();
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        int tmp = cur_total_num;
+        cur_total_num += 1;
+        std::cout << "  in exp b type 1 : " << tmp << endl;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++;
+          }
+          koopa_string += "  store " + to_string(imm_stack.top()) + ", %" + to_string(exp_depth-1) + "\n"; 
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += to_string(imm_stack.top());
+          imm_stack.pop();
+          cur_num.pop();
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+      total_need_fill = need_to_fill;
+      expb->Dump();
+      need_to_fill = total_need_fill;
+    }
+    if(type == 2){
+      std::cout << "  in exp b stage 1" << endl;
+      int total_need_fill = need_to_fill;
+      initval->Dump();
+      need_to_fill = total_need_fill;
+      std::cout << "  in exp b stage 2" << endl;
+      // this is not another {}
+      if(!imm_stack.empty()){
+        int ttldepth = array_index[block_depth][cur_array].size();
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        int tmp = cur_total_num;
+        cur_total_num += 1;
+        std::cout << "  in exp b type 1 : " << tmp << endl;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++;
+          }
+          koopa_string += "  store " + to_string(imm_stack.top()) + ", %" + to_string(exp_depth-1) + "\n"; 
+          imm_stack.pop();
+          cur_num.pop();
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += to_string(imm_stack.top());
+          imm_stack.pop();
+          cur_num.pop();
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+      std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        
+      for(int tmp = cur_total_num ; tmp < need_to_fill ;){
+        int ttldepth = array_index[block_depth][cur_array].size();
+        std::cout << "  in const exp b stage 7" << endl;
+        stack<int> ref_stack;
+        vector<int> ref_vector;
+        for(int i = 0 ; i < ttldepth ; i++){
+          ref_stack.push(tmp%array_index[block_depth][cur_array][i]);
+          ref_vector.push_back(tmp%array_index[block_depth][cur_array][i]);
+          tmp /= array_index[block_depth][cur_array][i];
+        }
+        if(block_depth != 0){
+          koopa_string += "  %" + to_string(exp_depth) + " = getelemptr @" + cur_array + "_" + to_string(block_depth) + ", " + to_string(ref_stack.top()) + "\n";
+          ref_stack.pop();
+          exp_depth ++;
+          for(int i = 1 ; i < ttldepth ; i ++){
+            int refi = ref_stack.top();
+            ref_stack.pop();
+            koopa_string += "  %" + to_string(exp_depth) + " = getelemptr %" + to_string(exp_depth-1) + ", " + to_string(refi) + "\n";
+            exp_depth++; 
+          }
+          koopa_string += "  store " + to_string(0) + ", %" + to_string(exp_depth-1) + "\n"; 
+          cur_total_num++;
+          tmp = cur_total_num;
+        }
+        else{
+          std::cout << "    step2 - global: " << ref_stack.top() << endl;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == 0);
+            }
+            if(flg){
+              koopa_string += "{";
+            }
+          }
+          koopa_string += "0";
+          int flg2 = 1;
+          for(int j = 0; j < ttldepth ; j++){
+            int flg = 1;
+            for(int k = j; k >= 0 ; k--){
+              flg = flg && (ref_vector[k] == array_index[block_depth][cur_array][k] - 1);
+            }
+            flg2 = flg2 && flg;
+            if(flg){
+              koopa_string += "}";
+            }
+          }
+          if(!flg2){
+            koopa_string += ", ";
+          }
+          cur_total_num++;
+          tmp = cur_total_num;
+          std::cout << "    step3 : need_to_fill: " <<need_to_fill << "; cur_total_num : " <<cur_total_num << endl;
+        }
+      }
+    }
   }
 };
 
