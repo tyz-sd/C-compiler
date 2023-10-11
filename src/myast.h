@@ -20,6 +20,7 @@ static stack<int> imm_stack;
 static map<std::string, std::string> const_symtbl;
 static map<std::string, std::string> var_symtbl;
 static int exp_depth;
+static int terminated = 0;
 class BaseAST {
  public:
   
@@ -84,14 +85,16 @@ class StmtAST : public BaseAST{
         int type;
     void Dump(FILE * fout, char * koopa_str) const override {
       std::cout << "in stmt"<<endl; 
-      if(type == 1){
+      if(terminated){return;}
+      if(type == 1 && !terminated){
+        terminated = 1;
         std::cout << "StmtAST { ";
         exp->Dump(fout,koopa_str);
         strcat(koopa_str, "  ret ");
         if(cur_num.empty())
           strcat(koopa_str, "0\n");
         else{
-          char exp1[10];
+          char exp1[20];
           memset(exp1,0,sizeof(exp1));
           int ttype = cur_num.top();
           cur_num.pop();
@@ -162,8 +165,8 @@ class LOrExpAST : public BaseAST{
       landexp -> Dump(fout, koopa_str);
       lorexp -> Dump(fout, koopa_str);
       int ttype;
-      char exp1[10];
-      char exp2[10];
+      char exp1[20];
+      char exp2[20];
       memset(exp1,0,sizeof(exp1));
       memset(exp2,0,sizeof(exp2));
       ttype = cur_num.top();
@@ -186,17 +189,17 @@ class LOrExpAST : public BaseAST{
         exp2[0] = '%';
         strcat(exp2, to_string(ttype).c_str());
       }
-      char myexp1[10];
+      char myexp1[20];
       memset(myexp1,0,sizeof(myexp1));
       myexp1[0] = '%';
       strcat(myexp1, to_string(exp_depth).c_str());
       exp_depth += 1;
-      char myexp2[10];
+      char myexp2[20];
       memset(myexp2,0,sizeof(myexp2));
       myexp2[0] = '%';
       strcat(myexp2, to_string(exp_depth).c_str());
       exp_depth += 1;
-      char myexp3[10];
+      char myexp3[20];
       memset(myexp3,0,sizeof(myexp3));
       myexp3[0] = '%';
       strcat(myexp3, to_string(exp_depth).c_str());
@@ -240,8 +243,8 @@ class LAndExpAST : public BaseAST{
       eqexp -> Dump(fout, koopa_str);
       landexp -> Dump(fout, koopa_str);
       int ttype;
-      char exp1[10];
-      char exp2[10];
+      char exp1[20];
+      char exp2[20];
       memset(exp1,0,sizeof(exp1));
       memset(exp2,0,sizeof(exp2));
       ttype = cur_num.top();
@@ -264,17 +267,17 @@ class LAndExpAST : public BaseAST{
         exp2[0] = '%';
         strcat(exp2, to_string(ttype).c_str());
       }
-      char myexp1[10];
+      char myexp1[20];
       memset(myexp1,0,sizeof(myexp1));
       myexp1[0] = '%';
       strcat(myexp1, to_string(exp_depth).c_str());
       exp_depth += 1;
-      char myexp2[10];
+      char myexp2[20];
       memset(myexp2,0,sizeof(myexp2));
       myexp2[0] = '%';
       strcat(myexp2, to_string(exp_depth).c_str());
       exp_depth += 1;
-      char myexp3[10];
+      char myexp3[20];
       memset(myexp3,0,sizeof(myexp3));
       myexp3[0] = '%';
       strcat(myexp3, to_string(exp_depth).c_str());
@@ -318,8 +321,8 @@ class EqExpAST : public BaseAST{
       relexp -> Dump(fout, koopa_str);
       eqexp -> Dump(fout, koopa_str);
       int ttype;
-      char exp1[10];
-      char exp2[10];
+      char exp1[20];
+      char exp2[20];
       memset(exp1,0,sizeof(exp1));
       memset(exp2,0,sizeof(exp2));
       ttype = cur_num.top();
@@ -342,7 +345,7 @@ class EqExpAST : public BaseAST{
         exp2[0] = '%';
         strcat(exp2, to_string(ttype).c_str());
       }
-      char myexp[10];
+      char myexp[20];
       memset(myexp,0,sizeof(myexp));
       myexp[0] = '%';
       strcat(myexp, to_string(exp_depth).c_str());
@@ -385,8 +388,8 @@ class RelExpAST : public BaseAST{
       addexp -> Dump(fout, koopa_str);
       relexp -> Dump(fout, koopa_str);
       int ttype;
-      char exp1[10];
-      char exp2[10];
+      char exp1[20];
+      char exp2[20];
       memset(exp1,0,sizeof(exp1));
       memset(exp2,0,sizeof(exp2));
       ttype = cur_num.top();
@@ -409,7 +412,7 @@ class RelExpAST : public BaseAST{
         exp2[0] = '%';
         strcat(exp2, to_string(ttype).c_str());
       }
-      char myexp[10];
+      char myexp[20];
       memset(myexp,0,sizeof(myexp));
       myexp[0] = '%';
       strcat(myexp, to_string(exp_depth).c_str());
@@ -470,8 +473,8 @@ class AddExpAST : public BaseAST{
       mulexp -> Dump(fout, koopa_str);
       addexp -> Dump(fout, koopa_str);
       int ttype;
-      char exp1[10];
-      char exp2[10];
+      char exp1[20];
+      char exp2[20];
       memset(exp1,0,sizeof(exp1));
       memset(exp2,0,sizeof(exp2));
       //std::cout << "finish parsing both id"<<endl;  
@@ -496,7 +499,7 @@ class AddExpAST : public BaseAST{
         exp2[0] = '%';
         strcat(exp2, to_string(ttype).c_str());
       }
-      char myexp[10];
+      char myexp[20];
       memset(myexp,0,sizeof(myexp));
       myexp[0] = '%';
       strcat(myexp, to_string(exp_depth).c_str());
@@ -540,8 +543,8 @@ class MulExpAST : public BaseAST{
       unaryexp -> Dump(fout, koopa_str);
       mulexp -> Dump(fout, koopa_str);
       int ttype;
-      char exp1[10];
-      char exp2[10];
+      char exp1[20];
+      char exp2[20];
       memset(exp1,0,sizeof(exp1));
       memset(exp2,0,sizeof(exp2));
       ttype = cur_num.top();
@@ -564,7 +567,7 @@ class MulExpAST : public BaseAST{
         exp2[0] = '%';
         strcat(exp2, to_string(ttype).c_str());
       }
-      char myexp[10];
+      char myexp[20];
       memset(myexp,0,sizeof(myexp));
       myexp[0] = '%';
       strcat(myexp, to_string(exp_depth).c_str());
@@ -617,7 +620,7 @@ class UnaryExpAST : public BaseAST{
       if(type != 2){  
         int ttype = cur_num.top();
         cur_num.pop();
-        char exp1[10];
+        char exp1[20];
         memset(exp1,0,sizeof(exp1));
         if(ttype == -1){
           strcpy(exp1, to_string(imm_stack.top()).c_str());
@@ -627,7 +630,7 @@ class UnaryExpAST : public BaseAST{
           exp1[0] = '%';
           strcat(exp1, to_string(ttype).c_str());
         }
-        char myexp[10];
+        char myexp[20];
         memset(myexp,0,sizeof(myexp));
         myexp[0] = '%';
         strcat(myexp, to_string(exp_depth).c_str());
@@ -670,7 +673,7 @@ class PrimaryExpAST : public BaseAST{
       //variable need to be load
       if(it1 == const_symtbl.end()){
         std::cout<<"no target in const symbol"<<endl;
-        char myexp[10];
+        char myexp[20];
         memset(myexp,0,sizeof(myexp));
         myexp[0] = '%';
         strcat(myexp, to_string(exp_depth).c_str());
@@ -726,15 +729,18 @@ class BlockItemAST : public BaseAST{
       std::unique_ptr<BaseAST> blockitem;
       int type;
     void Dump(FILE * fout, char * koopa_str) const override {
+      if(terminated){return;}
       std::cout << "in blockitem"<<endl;  
       if(type == 1){
         std::cout << "    type1"<<endl;  
         blockitem -> Dump(fout, koopa_str);
+        if(terminated){return;}
         stmt -> Dump(fout, koopa_str);
       }
       else if(type == 2){
         std::cout << "    type2"<<endl; 
         blockitem -> Dump(fout, koopa_str);
+        if(terminated){return;}
         decl -> Dump(fout, koopa_str);
       }
       else if(type == 3){
@@ -917,3 +923,5 @@ class InitValAST : public BaseAST{
 
 
 #endif
+
+
